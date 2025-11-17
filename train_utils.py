@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
 
+import joblib
+
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import StratifiedKFold
@@ -71,7 +73,7 @@ def train_one_fold(
     epochs: int = 20,
     batch_size: int = 256,
     patience: int = 3,
-) -> Tuple[MetricsDict, tf.keras.callbacks.History, StandardScaler]:
+) -> Tuple[MetricsDict, tf.keras.callbacks.History, StandardScaler, Path]:
     """Train a single fold with scaling, callbacks, and metric computation.
 
     The calling function may set ``train_one_fold._experiment_name`` and
@@ -118,7 +120,7 @@ def train_one_fold(
     val_pred = (val_pred_prob >= 0.5).astype(int).ravel()
     metrics = _compute_metrics(y_val, val_pred)
     logger.info("Fold %d metrics: %s", fold_index, json.dumps(metrics, indent=2))
-    return metrics, history, scaler
+    return metrics, history, scaler, checkpoint_path
 
 
 def run_cross_validation(
@@ -133,13 +135,14 @@ def run_cross_validation(
 
     skf = get_kfold_splits(X, y, n_splits=n_splits)
     fold_metrics: List[MetricsDict] = []
+    fold_artifacts: List[Dict[str, object]] = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(X, y), start=1):
         train_one_fold._experiment_name = "cv"
         train_one_fold._fold_index = fold_idx
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
-        metrics, _, _ = train_one_fold(
+        metrics, _, scaler, checkpoint_path = train_one_fold(
             model_fn,
             X_train,
             y_train,
@@ -148,12 +151,34 @@ def run_cross_validation(
             epochs=epochs,
             batch_size=batch_size,
         )
+        scaler_path = checkpoint_path.with_suffix(".joblib")
+        joblib.dump(scaler, scaler_path)
+        fold_artifacts.append(
+            {
+                "fold": fold_idx,
+                "metrics": metrics,
+                "weights_path": str(checkpoint_path),
+                "scaler_path": str(scaler_path),
+            }
+        )
         fold_metrics.append(metrics)
 
     aggregated_metrics = {
         key: float(np.mean([fold[key] for fold in fold_metrics])) for key in fold_metrics[0]
     }
     logger.info("Aggregated CV metrics: %s", json.dumps(aggregated_metrics, indent=2))
+
+    best_fold = max(fold_artifacts, key=lambda fold: fold["metrics"]["f1"])
+    metadata = {
+        "folds": fold_artifacts,
+        "aggregate": aggregated_metrics,
+        "best_fold": best_fold,
+    }
+    metadata_path = Path("results") / "cv_metadata.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    with metadata_path.open("w", encoding="utf-8") as fp:
+        json.dump(metadata, fp, indent=2)
+    logger.info("Saved CV metadata (weights + scalers) to %s", metadata_path)
     return fold_metrics, aggregated_metrics
 
 
