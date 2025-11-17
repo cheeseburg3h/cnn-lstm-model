@@ -52,6 +52,7 @@ All experiments share the same CLI defined in `experiments.py`. Enable logging b
 python experiments.py --run cv --ember_root /data/ember2018 --epochs 20 --batch_size 256 --n_splits 4
 ```
 This command trains four models with stratified folds and averages their metrics. Fold-specific checkpoints are saved to `results/checkpoints/cv_<fold>.h5`, and aggregated metrics are written to `results/cv_metrics.json`.
+Each fold now also saves its fitted scaler alongside the weights (`results/checkpoints/cv_<fold>.joblib`), and a summary file `results/cv_metadata.json` captures the metrics plus the best fold by F1 for easy reuse. The `--ember_root` path is never fetched from the internet—it is only read locally from your machine (e.g., `--ember_root "C:\\Users\\Justin\\Desktop\\dataset\\ember"` on Windows), so no data is uploaded or downloaded during training.
 
 ### 2. Internal Holdout Evaluation (90/10)
 ```bash
